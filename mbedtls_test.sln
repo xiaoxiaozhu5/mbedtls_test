@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.32602.291
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "mbedtls_test", "mbedtls_test.vcxproj", "{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Debug|x64.ActiveCfg = Debug|x64
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Debug|x64.Build.0 = Debug|x64
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Debug|x86.ActiveCfg = Debug|Win32
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Debug|x86.Build.0 = Debug|Win32
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Release|x64.ActiveCfg = Release|x64
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Release|x64.Build.0 = Release|x64
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Release|x86.ActiveCfg = Release|Win32
+		{B6A9B8CC-23DD-4CC4-B6AB-3FCEA6372CED}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {AE4A56F3-BCC2-4C35-90F4-FE5A03509FCA}
+	EndGlobalSection
+EndGlobal
