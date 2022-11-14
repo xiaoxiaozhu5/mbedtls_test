@@ -141,6 +141,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="mbedtls_test.cpp" />
+    <ClCompile Include="simple_test.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />

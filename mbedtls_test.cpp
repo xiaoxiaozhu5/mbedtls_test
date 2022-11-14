@@ -90,7 +90,7 @@ int my_recv(void *ctx, unsigned char* buf, size_t len)
 	return mbedtls_net_recv(ctx, buf, len);
 }
 
-int main()
+int main1()
 {
 	bool use_ca = false;
 
