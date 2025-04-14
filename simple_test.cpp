@@ -83,7 +83,7 @@ void aes_gcm_test()
 }
 
 
-int main(int argc, char* argv[])
+int main1(int argc, char* argv[])
 {
 	aes_gcm_test();
 	if(argc != 3)

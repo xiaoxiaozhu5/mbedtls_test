@@ -10,6 +10,8 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/net.h>
 
+#define HOST_TO_CONNECT "github.com"
+
 
 enum RECORD_TYPE : unsigned char
 {
@@ -130,7 +132,7 @@ int main1()
 	mbedtls_ssl_conf_min_version(&ssl_config, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
 
 	//step 3. make a connection
-	rc = mbedtls_net_connect(&net_ctx, "www.google.com", "443", MBEDTLS_NET_PROTO_TCP);
+	rc = mbedtls_net_connect(&net_ctx, HOST_TO_CONNECT, "443", MBEDTLS_NET_PROTO_TCP);
 	if (0 != rc)
 	{
 		std::cout << "mbedtls_net_connect failed:" << rc << std::endl;
@@ -151,7 +153,7 @@ int main1()
 
 	if (use_ca)
 	{
-		mbedtls_ssl_set_hostname(&ssl_ctx, "www.google.com");
+		mbedtls_ssl_set_hostname(&ssl_ctx, HOST_TO_CONNECT);
 	}
 
 	//mbedtls_ssl_set_bio(&ssl_ctx, &net_ctx, mbedtls_net_send, mbedtls_net_recv, nullptr);
@@ -186,7 +188,7 @@ int main1()
 	}
 
 	std::string get_hdr = "GET / HTTP/1.1\r\n"
-		"Host: www.google.com\r\n"
+		"Host: " HOST_TO_CONNECT "\r\n"
 		"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36\r\n"
 		"Accept: */*\r\n\r\n";
 	rc = mbedtls_ssl_write(&ssl_ctx, (const unsigned char*)get_hdr.c_str(), get_hdr.size());

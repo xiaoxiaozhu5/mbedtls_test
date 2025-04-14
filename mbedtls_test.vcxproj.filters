@@ -15,10 +15,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="mbedtls_test.cpp">
+    <ClCompile Include="mbedtls_client_test.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="simple_test.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="mbedtls_server_test.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
