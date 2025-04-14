@@ -10,57 +10,9 @@
 #include <mbedtls/entropy.h>
 #include <mbedtls/net.h>
 
+#include "tls_utils.h"
+
 #define HOST_TO_CONNECT "github.com"
-
-
-enum RECORD_TYPE : unsigned char
-{
-    recordTypeChangeCipherSpec = 20,
-    recordTypeAlert            = 21,
-    recordTypeHandshake        = 22,
-    recordTypeApplicationData  = 23,
-};
-
-enum RECORD_VERSION : unsigned short
-{
-    VersionTLS10 = 0x0301,
-    VersionTLS11 = 0x0302,
-    VersionTLS12 = 0x0303,
-    VersionTLS13 = 0x0304,
- 
-    // Deprecated: SSLv3 is cryptographically broken
-    VersionSSL30 = 0x0300
-};
-
-#pragma pack(push, 1)
-struct record_layer
-{
-	RECORD_TYPE content_type;
-	RECORD_VERSION version;
-	unsigned short len;
-};
-#pragma pack(pop)
-
-WORD set_console_color(WORD color = FOREGROUND_GREEN)
-{
-	HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-	WORD wOldColorAttrs;
-	CONSOLE_SCREEN_BUFFER_INFO csbiInfo;
-
-	// Save the current color
-	GetConsoleScreenBufferInfo(h, &csbiInfo);
-	wOldColorAttrs = csbiInfo.wAttributes;
-
-	// Set the new color
-	SetConsoleTextAttribute(h, color | FOREGROUND_INTENSITY);
-	return wOldColorAttrs;
-}
-
-void restore_console_color(WORD attri)
-{
-	SetConsoleTextAttribute(GetStdHandle(STD_OUTPUT_HANDLE), attri);
-}
-
 
 int handle_data(char* data, size_t sz)
 {
@@ -68,7 +20,7 @@ int handle_data(char* data, size_t sz)
 	return 0;
 }
 
-int my_send(void *ctx, const unsigned char* buf, size_t len)
+static int my_send(void *ctx, const unsigned char* buf, size_t len)
 {
 	if(len >= 5)
 	{
@@ -80,7 +32,7 @@ int my_send(void *ctx, const unsigned char* buf, size_t len)
 	return	mbedtls_net_send(ctx, buf, len);
 }
 
-int my_recv(void *ctx, unsigned char* buf, size_t len)
+static int my_recv(void *ctx, unsigned char* buf, size_t len)
 {
 	if(len >= 5)
 	{

@@ -143,9 +143,13 @@
     <ClCompile Include="mbedtls_client_test.cpp" />
     <ClCompile Include="mbedtls_server_test.cpp" />
     <ClCompile Include="simple_test.cpp" />
+    <ClCompile Include="tls_utils.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="tls_utils.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

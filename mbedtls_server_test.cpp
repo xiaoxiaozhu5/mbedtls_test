@@ -11,6 +11,8 @@
 #include <process.h>
 #include <mbedtls/platform.h>
 
+#include "tls_utils.h"
+
 #if !defined(MBEDTLS_ENTROPY_C) || !defined(MBEDTLS_CTR_DRBG_C) ||      \
     !defined(MBEDTLS_NET_C) || !defined(MBEDTLS_SSL_SRV_C) ||           \
     !defined(MBEDTLS_PEM_PARSE_C) || !defined(MBEDTLS_X509_CRT_PARSE_C)
@@ -106,6 +108,30 @@ typedef struct {
 #endif
 } pthread_info_t;
 
+static int my_send(void *ctx, const unsigned char* buf, size_t len)
+{
+	if(len >= 5)
+	{
+		auto record = reinterpret_cast<record_layer*>(const_cast<unsigned char*>(buf));
+		WORD attri = set_console_color();
+		printf("[send]content_type:%2d ver:0x%04x len:%d\n", record->content_type, record->version, record->len);
+		restore_console_color(attri);
+	}
+	return	mbedtls_net_send(ctx, buf, len);
+}
+
+static int my_recv(void *ctx, unsigned char* buf, size_t len)
+{
+	if(len >= 5)
+	{
+		auto record = reinterpret_cast<record_layer*>(buf);
+		WORD attri = set_console_color(FOREGROUND_BLUE);
+		printf("[recv]content_type:%2d ver:0x%04x len:%d\n", record->content_type, record->version, record->len);
+		restore_console_color(attri);
+	}
+	return mbedtls_net_recv(ctx, buf, len);
+}
+
 static thread_info_t    base_info;
 static pthread_info_t   threads[MAX_NUM_THREADS];
 
@@ -140,7 +166,8 @@ static void *handle_ssl_connection(void *data)
         goto thread_exit;
     }
 
-    mbedtls_ssl_set_bio(&ssl, client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+    //mbedtls_ssl_set_bio(&ssl, client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+    mbedtls_ssl_set_bio(&ssl, client_fd, my_send, my_recv, NULL);
 
     /*
      * 5. Handshake
@@ -230,7 +257,7 @@ static void *handle_ssl_connection(void *data)
                    thread_id, len, (char *) buf);
     fflush(stdout);
 
-    mbedtls_printf("  [ #%ld ]  . Closing the connection...", thread_id);
+    mbedtls_printf("  [ #%ld ]  . Closing the connection...\n", thread_id);
 
     while ((ret = mbedtls_ssl_close_notify(&ssl)) < 0) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ &&
