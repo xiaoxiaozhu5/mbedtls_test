@@ -437,8 +437,8 @@ int main(void)
     }
 #endif
 
-    char tmp[MAX_PATH];
-    snprintf(tmp, MAX_PATH, "%s%s", szCurrentPath, "server.crt");
+    char tmp[1024];
+    snprintf(tmp, 1024, "%s%s", szCurrentPath, "server.crt");
     /*
      * This demonstration program uses embedded test certificates.
      * Instead, you may want to use mbedtls_x509_crt_parse_file() to read the
@@ -451,7 +451,7 @@ int main(void)
     }
 
     mbedtls_pk_init(&pkey);
-    snprintf(tmp, MAX_PATH, "%s%s", szCurrentPath, "server.key");
+    snprintf(tmp, 1024, "%s%s", szCurrentPath, "server.key");
     ret =  mbedtls_pk_parse_keyfile(&pkey, tmp, NULL);
     if (ret != 0) {
         mbedtls_printf(" failed\n  !  mbedtls_pk_parse_keyfile returned %d\n\n", ret);
