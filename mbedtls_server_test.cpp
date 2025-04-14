@@ -419,19 +419,40 @@ int main(void)
     mbedtls_printf("\n  . Loading the server cert. and key...");
     fflush(stdout);
 
+#if defined(_WIN32)
+    CHAR szCurrentPath[MAX_PATH];
+    GetModuleFileNameA(NULL, szCurrentPath, MAX_PATH);
+    strrchr(szCurrentPath, '\\')[1] = '\0';
+#else
+	char szCurrentPath[1024] = {0};
+    int retval = readlink("/proc/self/exe", szCurrentPath, sizeof(szCurrentPath)-1);
+    if (retval > 0)
+    {
+        szCurrentPath[retval] = '\0';
+        char* end = strrchr(szCurrentPath, '/');
+        if (NULL == end)
+            szCurrentPath[0] = 0;
+        else
+            *end = '\0';
+    }
+#endif
+
+    char tmp[MAX_PATH];
+    snprintf(tmp, MAX_PATH, "%s%s", szCurrentPath, "server.crt");
     /*
      * This demonstration program uses embedded test certificates.
      * Instead, you may want to use mbedtls_x509_crt_parse_file() to read the
      * server and CA certificates, as well as mbedtls_pk_parse_keyfile().
      */
-    ret = mbedtls_x509_crt_parse_file(&srvcert, "server.crt");
+    ret = mbedtls_x509_crt_parse_file(&srvcert, tmp);
     if (ret != 0) {
         mbedtls_printf(" failed\n  !  mbedtls_x509_crt_parse_file returned %d\n\n", ret);
         goto exit;
     }
 
     mbedtls_pk_init(&pkey);
-    ret =  mbedtls_pk_parse_keyfile(&pkey, "server.key", NULL);
+    snprintf(tmp, MAX_PATH, "%s%s", szCurrentPath, "server.key");
+    ret =  mbedtls_pk_parse_keyfile(&pkey, tmp, NULL);
     if (ret != 0) {
         mbedtls_printf(" failed\n  !  mbedtls_pk_parse_keyfile returned %d\n\n", ret);
         goto exit;
