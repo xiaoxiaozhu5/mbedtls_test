@@ -8,10 +8,8 @@
 
 //curl -vv -Sk https://localhost:4433
 
-#include <process.h>
-#include <mbedtls/platform.h>
 
-#include "tls_utils.h"
+#include <mbedtls/platform.h>
 
 #if !defined(MBEDTLS_ENTROPY_C) || !defined(MBEDTLS_CTR_DRBG_C) ||      \
     !defined(MBEDTLS_NET_C) || !defined(MBEDTLS_SSL_SRV_C) ||           \
@@ -31,6 +29,8 @@ int main(void)
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <process.h>
+#include <io.h>
 #endif
 
 #include <mbedtls/entropy.h>
@@ -48,6 +48,9 @@ int main(void)
 #include <mbedtls/memory_buffer_alloc.h>
 #endif
 
+#include "memmem.h"
+#include "tls_utils.h"
+
 
 #define HTTP_RESPONSE \
     "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n" \
@@ -57,6 +60,53 @@ int main(void)
 #define DEBUG_LEVEL 0
 
 #define MAX_NUM_THREADS 5
+
+#define TLS_HEADER_LEN 5
+#define TLS_HANDSHAKE_CONTENT_TYPE 0x16
+#define TLS_HANDSHAKE_TYPE_CLIENT_HELLO 0x01
+
+#define TLS_MATCH       1
+#define TLS_NOMATCH     0
+
+#define TLS_EINVAL      -1 /* Invalid parameter (NULL data pointer) */
+#define TLS_ELENGTH     -2 /* Incomplete request */
+#define TLS_EVERSION    -3 /* TLS version that cannot be parsed */
+#define TLS_ENOEXT      -4 /* No ALPN or SNI extension found */
+#define TLS_EPROTOCOL   -5 /* Protocol error */
+
+#ifndef MIN
+#define MIN(X, Y) ((X) < (Y) ? (X) : (Y))
+#endif
+
+enum 
+{
+    PROBE_HTTP = 0,
+    PROBE_HTTPS,
+    PROBE_MAX
+};
+
+typedef enum {
+    PROBE_NEXT,  /* Enough data, probe failed -- it's some other protocol */
+    PROBE_MATCH, /* Enough data, probe successful -- it's the current protocol */
+    PROBE_AGAIN, /* Not enough data for this probe, try again with more data */
+} probe_result;
+
+struct queue {
+    struct mbedtls_net_context fd;
+    unsigned char *begin_deferred_data;
+    unsigned char *deferred_data;
+    int deferred_data_size;
+};
+
+struct connection {
+
+    /* q[0]: queue for external connection (client);
+     * q[1]: queue for internal connection (httpd or sshd);
+     * */
+    struct queue q[2];
+    struct probe_info *probe;
+    void* data;
+};
 
 #if defined(_WIN32)
 CRITICAL_SECTION debug_mutex;
@@ -92,8 +142,195 @@ static void my_mutexed_debug(void *ctx, int level,
 #endif
 }
 
+typedef int (* pfn_probe)(const char* buf, int len);
+
+static int probe_http_method(const char *p, int len, const char *opt)
+{
+    if (len < strlen(opt))
+        return PROBE_AGAIN;
+
+    return !strncmp(p, opt, strlen(opt));
+}
+
+static int is_http_protocol(const char* buf, int len)
+{
+    int res;
+    /* If it's got HTTP in the request (HTTP/1.1) then it's HTTP */
+    if (memmem(buf, len, "HTTP", 4))
+        return PROBE_MATCH;
+
+#define PROBE_HTTP_METHOD(opt) if ((res = probe_http_method(buf, len, opt)) != PROBE_NEXT) return res
+
+    /* Otherwise it could be HTTP/1.0 without version: check if it's got an
+     * HTTP method (RFC2616 5.1.1) */
+    PROBE_HTTP_METHOD("OPTIONS");
+    PROBE_HTTP_METHOD("GET");
+    PROBE_HTTP_METHOD("HEAD");
+    PROBE_HTTP_METHOD("POST");
+    PROBE_HTTP_METHOD("PUT");
+    PROBE_HTTP_METHOD("DELETE");
+    PROBE_HTTP_METHOD("TRACE");
+    PROBE_HTTP_METHOD("CONNECT");
+
+#undef PROBE_HTTP_METHOD
+
+    return PROBE_NEXT;
+}
+
+int parse_tls_header(const char *data, size_t data_len)
+{
+    char tls_content_type;
+    char tls_version_major;
+    char tls_version_minor;
+    size_t pos = TLS_HEADER_LEN;
+    size_t len;
+
+    /* Check that our TCP payload is at least large enough for a TLS header */
+    if (data_len < TLS_HEADER_LEN)
+        return TLS_ELENGTH;
+
+    tls_content_type = data[0];
+    if (tls_content_type != TLS_HANDSHAKE_CONTENT_TYPE) {
+        mbedtls_printf("Request did not begin with TLS handshake.");
+        return TLS_EPROTOCOL;
+    }
+
+    tls_version_major = data[1];
+    tls_version_minor = data[2];
+    if (tls_version_major < 3) {
+        mbedtls_printf("Received SSL %d.%d handshake which cannot be parsed.", tls_version_major, tls_version_minor);
+        return TLS_EVERSION;
+    }
+
+    /* TLS record length */
+    len = ((unsigned char)data[3] << 8) +
+          (unsigned char)data[4] + TLS_HEADER_LEN;
+    data_len = MIN(data_len, len);
+
+    /* Check we received entire TLS record length */
+    if (data_len < len)
+        return TLS_ELENGTH;
+
+    /*
+     * Handshake
+     */
+    if (pos + 1 > data_len) {
+        return TLS_EPROTOCOL;
+    }
+    if (data[pos] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO) {
+        mbedtls_printf("Not a client hello\n");
+        return TLS_EPROTOCOL;
+    }
+
+    /* Skip past fixed length records:
+       1	Handshake Type
+       3	Length
+       2	Version (again)
+       32	Random
+       to	Session ID Length
+     */
+    pos += 38;
+
+    /* Session ID */
+    if (pos + 1 > data_len)
+        return TLS_EPROTOCOL;
+    len = (unsigned char)data[pos];
+    pos += 1 + len;
+
+    /* Cipher Suites */
+    if (pos + 2 > data_len)
+        return TLS_EPROTOCOL;
+    len = ((unsigned char)data[pos] << 8) + (unsigned char)data[pos + 1];
+    pos += 2 + len;
+
+    /* Compression Methods */
+    if (pos + 1 > data_len)
+        return TLS_EPROTOCOL;
+    len = (unsigned char)data[pos];
+    pos += 1 + len;
+
+    if (pos == data_len && tls_version_major == 3 && tls_version_minor == 0) {
+        mbedtls_printf("Received SSL 3.0 handshake without extensions\n");
+        return TLS_EVERSION;
+    }
+
+    /* Extensions */
+    if (pos + 2 > data_len)
+        return TLS_EPROTOCOL;
+    len = ((unsigned char)data[pos] << 8) + (unsigned char)data[pos + 1];
+    pos += 2;
+
+    if (pos + len > data_len)
+        return TLS_EPROTOCOL;
+
+	return TLS_MATCH;
+}
+
+static int is_https_protocol(const char* buf, int len)
+{
+    switch (parse_tls_header(buf, len)) {
+    case TLS_MATCH: return PROBE_MATCH;
+    case TLS_NOMATCH: return PROBE_NEXT;
+    case TLS_ELENGTH: return PROBE_AGAIN;
+    default: return PROBE_NEXT;
+    }
+}
+
+struct probe_info
+{
+    const char* name;
+    pfn_probe probe;
+    struct addrinfo* saddr;
+}probes[] = 
+{
+    {"http", is_http_protocol, NULL},
+    {"https", is_https_protocol, NULL},
+    {NULL, NULL, NULL}
+};
+
+static int defer_write(struct queue *q, void* data, int data_size)
+{
+    unsigned char *p;
+    ptrdiff_t data_offset = q->deferred_data - q->begin_deferred_data;
+
+    p = (unsigned char*)realloc(q->begin_deferred_data, data_offset + q->deferred_data_size + data_size);
+	if(p == NULL)
+	{
+		return -1;
+	}
+
+    q->begin_deferred_data = p;
+    q->deferred_data = p + data_offset;
+    p += data_offset + q->deferred_data_size;
+    q->deferred_data_size += data_size;
+    memcpy(p, data, data_size);
+
+    return 0;
+}
+
+static int flush_deferred(struct queue *q)
+{
+    int n;
+
+    n = mbedtls_net_send(&q->fd, (const unsigned char*)q->deferred_data, q->deferred_data_size);
+    if (n == -1)
+        return n;
+
+    if (n == q->deferred_data_size) {
+        free(q->begin_deferred_data);
+        q->begin_deferred_data = NULL;
+        q->deferred_data = NULL;
+        q->deferred_data_size = 0;
+    } else {
+        q->deferred_data += n;
+        q->deferred_data_size -= n;
+    }
+
+    return n;
+}
+
 typedef struct {
-    mbedtls_net_context client_fd;
+    struct connection* cnx;
     int thread_complete;
     const mbedtls_ssl_config *config;
 } thread_info_t;
@@ -111,6 +348,7 @@ typedef struct {
 #if defined(_WIN32)
 static int my_send(void *ctx, const unsigned char* buf, size_t len)
 {
+    struct connection *cnx = (struct connection *)ctx;
 	if(len >= 5)
 	{
 		auto record = reinterpret_cast<record_layer*>(const_cast<unsigned char*>(buf));
@@ -118,11 +356,33 @@ static int my_send(void *ctx, const unsigned char* buf, size_t len)
 		printf("[send]content_type:%2d ver:0x%04x len:%d\n", record->content_type, record->version, record->len);
 		restore_console_color(attri);
 	}
-	return	mbedtls_net_send(ctx, buf, len);
+	return	mbedtls_net_send(&cnx->q[0].fd, buf, len);
 }
 
 static int my_recv(void *ctx, unsigned char* buf, size_t len)
 {
+    struct connection *cnx = (struct connection *)ctx;
+
+    int n = 0;
+    struct queue *q = &cnx->q[1];
+    if (q->deferred_data && q->deferred_data_size)
+    {
+        if (q->deferred_data_size >= len)
+        {
+            memcpy(buf, q->deferred_data, len);
+            n = len;
+            q->deferred_data_size -= n;
+            q->deferred_data += n;
+            if (0 == q->deferred_data_size) {
+                free(q->begin_deferred_data);
+                q->begin_deferred_data = NULL;
+                q->deferred_data = NULL;
+                q->deferred_data_size = 0;
+            }
+        }
+        return n;
+    }
+
 	if(len >= 5)
 	{
 		auto record = reinterpret_cast<record_layer*>(buf);
@@ -130,7 +390,7 @@ static int my_recv(void *ctx, unsigned char* buf, size_t len)
 		printf("[recv]content_type:%2d ver:0x%04x len:%d\n", record->content_type, record->version, record->len);
 		restore_console_color(attri);
 	}
-	return mbedtls_net_recv(ctx, buf, len);
+	return mbedtls_net_recv(&cnx->q[0].fd, buf, len);
 }
 #endif
 
@@ -145,7 +405,7 @@ static void *handle_ssl_connection(void *data)
 {
     int ret, len;
     thread_info_t *thread_info = (thread_info_t *) data;
-    mbedtls_net_context *client_fd = &thread_info->client_fd;
+    struct connection *cnx = thread_info->cnx;
 #if defined(_WIN32)
     DWORD thread_id = GetCurrentThreadId();
 #else
@@ -169,7 +429,7 @@ static void *handle_ssl_connection(void *data)
     }
 
 #if defined(_WIN32)
-    mbedtls_ssl_set_bio(&ssl, client_fd, my_send, my_recv, NULL);
+    mbedtls_ssl_set_bio(&ssl, cnx, my_send, my_recv, NULL);
 #else
     mbedtls_ssl_set_bio(&ssl, client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
 #endif
@@ -288,16 +548,20 @@ thread_exit:
                        thread_id, (unsigned int) -ret, error_buf);
     }
 #endif
-
-    mbedtls_net_free(client_fd);
+	if (cnx->q[1].begin_deferred_data && cnx->q[1].deferred_data_size)
+	{
+		free(cnx->q[1].begin_deferred_data);
+	}
+    mbedtls_net_free(&cnx->q[0].fd);
     mbedtls_ssl_free(&ssl);
+    free(cnx);
 
     thread_info->thread_complete = 1;
 
     return NULL;
 }
 
-static int thread_create(mbedtls_net_context *client_fd)
+static int thread_create(struct connection* cnx)
 {
     int ret, i;
 
@@ -330,7 +594,7 @@ static int thread_create(mbedtls_net_context *client_fd)
      */
     memcpy(&threads[i].data, &base_info, sizeof(base_info));
     threads[i].active = 1;
-    memcpy(&threads[i].data.client_fd, client_fd, sizeof(mbedtls_net_context));
+    threads[i].data.cnx = cnx;
 
 #if defined(_WIN32)
     threads[i].thread = (HANDLE)_beginthreadex(NULL, 0, handle_ssl_connection, &threads[i].data, 0, NULL);
@@ -344,11 +608,63 @@ static int thread_create(mbedtls_net_context *client_fd)
     return 0;
 }
 
+static int probe_buffer(char* buf, int len, struct probe_info* probe_in, int probe_len, struct probe_info** probe_out)
+{
+  *probe_out = 0;
+  int res = 0, again = 0;
+  struct probe_info* p;
+  for(int i = 0; i < probe_len; ++i)
+  {
+    p = &probe_in[i];
+    if(!p)
+    {
+        continue;
+    }
+    res = p->probe(buf, len);
+    if(res == PROBE_MATCH)
+    {
+        *probe_out = p;
+        return PROBE_MATCH;
+    }
+    if(res == PROBE_AGAIN)
+    {
+        again++;
+    }
+  }
+  if(again)
+  {
+    return PROBE_AGAIN;
+  }
+  *probe_out = &probe_in[probe_len-1];
+  return PROBE_MATCH;
+}
+
+static int probe_client_data(struct connection *cnx)
+{
+    unsigned char buffer[BUFSIZ];
+    SSIZE_T n;
+
+    n = mbedtls_net_recv(&cnx->q[0].fd, buffer, sizeof(buffer));
+    if (n > 0) {
+        defer_write(&cnx->q[1], buffer, n);
+        return probe_buffer((char*)cnx->q[1].begin_deferred_data,
+                        cnx->q[1].deferred_data_size, 
+                        probes, 
+                        PROBE_MAX, 
+                        &cnx->probe);
+    }
+
+    cnx->probe = &probes[PROBE_MAX-1];
+    return PROBE_MATCH;
+}
+
 int main(void)
 {
     int ret;
+	int res = PROBE_AGAIN;
     mbedtls_net_context listen_fd, client_fd;
     const char pers[] = "ssl_pthread_server";
+    struct connection* cnx = NULL;
 
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context ctr_drbg;
@@ -535,16 +851,70 @@ reset:
         goto exit;
     }
 
-    mbedtls_printf("  [ main ]  ok\n");
-    mbedtls_printf("  [ main ]  Creating a new thread\n");
+    cnx = (struct connection*)malloc(sizeof(struct connection));
+	memset(cnx, 0, sizeof(struct connection));
 
-    if ((ret = thread_create(&client_fd)) != 0) {
-        mbedtls_printf("  [ main ]  failed: thread_create returned %d\n", ret);
+    struct timeval tv;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(client_fd.fd, &fds);
+	memset(&tv, 0, sizeof(tv));
+    tv.tv_sec = 1;
+
+    cnx->q[0].fd = client_fd;
+    while (res == PROBE_AGAIN)
+    {
+	   res = select(client_fd.fd+1, &fds, NULL, NULL, &tv); 
+       if (res == -1)
+       {
+       	   mbedtls_printf("  [ main ]  select failed\n");
+	       break;
+       }
+       if (FD_ISSET(client_fd.fd, &fds))
+       {
+       	   res = probe_client_data(cnx); 
+       }
+       else
+       {
+	       continue;
+       }
+    }
+
+    if (strlen(cnx->probe->name) == 4)
+    {
+		mbedtls_printf("  [ main ]  http procotol, not https protocol\n");
+		ret = 0;
+		res = PROBE_AGAIN;
+        if (cnx->q[1].deferred_data && cnx->q[1].deferred_data_size)
+        {
+	       free(cnx->q[1].begin_deferred_data); 
+        }
         mbedtls_net_free(&client_fd);
+        free(cnx);
+        goto reset;
+    }
+    else if (strlen(cnx->probe->name) == 5)
+    {
+		mbedtls_printf("  [ main ]  https procotol\n");
+    }
+
+    mbedtls_printf("  [ main ]  ok, Creating a new thread\n");
+
+    if ((ret = thread_create(cnx)) != 0) {
+        mbedtls_printf("  [ main ]  failed: thread_create returned %d\n", ret);
+		ret = 0;
+		res = PROBE_AGAIN;
+        if (cnx->q[1].deferred_data && cnx->q[1].deferred_data_size)
+        {
+	       free(cnx->q[1].begin_deferred_data); 
+        }
+        mbedtls_net_free(&client_fd);
+        free(cnx);
         goto reset;
     }
 
     ret = 0;
+    res = PROBE_AGAIN;
     goto reset;
 
 exit:
