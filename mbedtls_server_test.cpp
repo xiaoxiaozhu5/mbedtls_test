@@ -108,6 +108,7 @@ typedef struct {
 #endif
 } pthread_info_t;
 
+#if defined(_WIN32)
 static int my_send(void *ctx, const unsigned char* buf, size_t len)
 {
 	if(len >= 5)
@@ -131,6 +132,7 @@ static int my_recv(void *ctx, unsigned char* buf, size_t len)
 	}
 	return mbedtls_net_recv(ctx, buf, len);
 }
+#endif
 
 static thread_info_t    base_info;
 static pthread_info_t   threads[MAX_NUM_THREADS];
@@ -166,8 +168,11 @@ static void *handle_ssl_connection(void *data)
         goto thread_exit;
     }
 
-    //mbedtls_ssl_set_bio(&ssl, client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+#if defined(_WIN32)
     mbedtls_ssl_set_bio(&ssl, client_fd, my_send, my_recv, NULL);
+#else
+    mbedtls_ssl_set_bio(&ssl, client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+#endif
 
     /*
      * 5. Handshake
